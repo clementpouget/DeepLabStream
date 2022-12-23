@@ -8,7 +8,7 @@ Licensed under GNU General Public License v3.0
 
 import cv2
 import numpy as np
-
+import math
 
 def plot_dots(image, coordinates, color, cond=False):
     """
@@ -20,8 +20,100 @@ def plot_dots(image, coordinates, color, cond=False):
         cv2.circle(image, (10, 10), 10, (0, 255, 0), -1)
     return image
 
+def plot_angle(image,pointa,pointb,pointc,event):
+    """
+    Takes the image and coordinates from 3 points to draw the angle between them.
+    Note: convert to int because opencv sucks
+    """
+    pta = ( int(pointa[0]), int(pointa[1]) )
+    ptb = ( int(pointb[0]), int(pointb[1]) )
+    ptc = ( int(pointc[0]), int(pointc[1]) )
+    
+    
+    if event:
+        color = (0,0,255)
+    else:
+        color = (255,0,0)
+    
+    cv2.line(image,pta,ptb,color,thickness=2)
+    cv2.line(image,ptb,ptc,color,thickness=2)
+    return image
+    
+
+def plot_absolute_angle(image,pointa,pointb,stim_angle,event):
+    """
+    Takes the image and
+    Note: convert to int because opencv sucks
+    """
+    pta = ( int(pointa[0]), int(pointa[1]) )
+    ptb = ( int(pointb[0]), int(pointb[1]) )
+    ptc = (int(ptb[0] + np.cos(stim_angle*np.pi/180)*80) , int(ptb[1] - np.sin(stim_angle*np.pi/180)*80))
+    
+    if event:
+        color = (255,0,0)
+    else:
+        color = (0,0,255)
+        
+    #Draw neck->nose vector
+    cv2.line(image,pta,ptb,color,thickness=2)
+    
+    #Draw target angle reference vector
+    cv2.line(image,ptb,ptc,(0,0,0),thickness=2)
+    
+    return image    
+
+def plot_angle_value(image,angle_value,plot_position,event):
+    """
+    Takes the image and plots the angle value next to the mouse. The color
+    changes, depending on if condition is met.
+    """
+    #Convert to int for opencv2 to not freak out
+    position = ( int(plot_position[0]), int(plot_position[1]) )
+    
+    
+    # NOTE : opencv colors is BGR not RGB!!!
+    if event:
+        color = (0,0,255)
+    else:
+        color = (0,0,0)
+    
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    fontScale = 1
+    thickness = 2
+    
+    image = cv2.putText(image, "%.1fdg" %angle_value, position, font, 
+                   fontScale, color, thickness)
+    
+    return image
+
+
+def plot_distance_traveled(image,distance,position,event):
+    """
+    Takes the image and plots the angle value next to the mouse. The color
+    changes, depending on if condition is met.
+    """
+    # make sure integer for opencv2!
+    
+    
+    # NOTE : opencv colors is BGR not RGB!!!# NOTE : opencv colors is BGR not RGB!!!
+    if event: # plot in red when under threshold
+        color = (0,0,255)
+    else: # plot in blue when over threshold
+        color = (0,0,0)
+    
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    fontScale = 1
+    thickness = 2
+    
+    image = cv2.putText(image, "%3.0f" %distance, position, font, 
+                   fontScale, color, thickness)
+    
+    return image
+
 
 def plot_bodyparts(image, skeletons):
+    
+    
     """
     Takes the image and skeletons list to plot them
     :return: resulting image

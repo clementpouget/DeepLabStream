@@ -11,7 +11,7 @@ import os
 import cv2
 import numpy as np
 from experiments.utils.DAQ_output import DigitalModDevice
-
+import pyfirmata
 
 def show_visual_stim_img(img_type="background", name="vistim", img_dict=None):
     """
@@ -120,12 +120,11 @@ def laser_toggle():
     laser.toggle()
     print("Laser was toggled")
 
-
 def laser_switch(switch: bool = False):
     """Toggle laser on or off
     Laser needs to be connected to DAQ_PORT and switched to "Digital modulation"
     If you use additional safety measurements to control the laser, make sure to undo them before starting the protocol!"""
-
+    
     laser = DigitalModDevice(LSR_DAQ_PORT)
     if switch:
         laser.turn_on()
@@ -134,6 +133,16 @@ def laser_switch(switch: bool = False):
     else:
         laser.turn_off()
         print("Laser is switched off")
+    
+def serial_laser_switch(ser, switch: bool = False):
+    """Toggle laser on or off through arduino Uno board.
+    The board must be connected to COM5 (see experiment optoG)"""
+    
+    if switch:
+        ser.write(b'H')
+    else:
+        ser.write(b'L')
+
 
 
 def deliver_tone_shock():

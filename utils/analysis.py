@@ -247,7 +247,7 @@ def angle_between_vectors(
     """
     # using atan2() formula for both vectors
     dir_ab = math.atan2(ya - yb, xa - xb)
-    dir_bc = math.atan2(yb - yc, xb - xc)
+    dir_bc = math.atan2(yc - yb, xc - xb)
 
     # angle between vectors in radians
     rad_angle = dir_ab - dir_bc
@@ -272,6 +272,30 @@ def angle_between_vectors(
         direction = "forward"
 
     return direction, angle
+
+def absolute_angle(xa: int, ya: int, xb: int, yb: int,) -> Tuple[str, float]:
+    """
+    Calculating absolute angle of vector, defined by coordinates
+    Returns angle and direction (left, right, forward or backward)
+    
+    *ISSUE* - if y axis is reversed, directions would also be reversed
+    """
+    # using atan2() formula
+    rad_angle = math.atan2(yb - ya, xb - xa)
+    angle = rad_angle*180/math.pi
+
+    # defining the direction
+    if 180 > angle > 0:
+        direction = "left"
+    elif -180 < angle < 0:
+        direction = "right"
+    elif abs(angle) == 180:
+        direction = "backwards"
+    else:
+        direction = "forward"
+
+    return direction, angle
+
 
 
 ## miscellaneous ##

@@ -5,7 +5,7 @@ University Bonn Medical Faculty, Germany
 https://github.com/SchwarzNeuroconLab/DeepLabStream
 Licensed under GNU General Public License v3.0
 """
-
+import numpy as np
 import random
 import time
 from functools import partial
@@ -27,17 +27,19 @@ from experiments.custom.triggers import (
     SocialInteractionTrigger,
 )
 
-from utils.plotter import plot_triggers_response
-from utils.analysis import angle_between_vectors
-from experiments.custom.stimulation import show_visual_stim_img, laser_switch
+from utils.plotter import plot_triggers_response,plot_dots,plot_angle,plot_angle_value,plot_absolute_angle, plot_bodyparts, plot_distance_traveled
+from utils.analysis import angle_between_vectors, absolute_angle, calculate_distance
+from experiments.custom.stimulation import show_visual_stim_img, laser_switch, serial_laser_switch
 from experiments.custom.classifier import FeatBsoidProcessPool, FeatSimbaProcessPool
 
 
+import copy
+import serial
 from utils.configloader import THRESHOLD, POOL_SIZE, TRIGGER
 
 
-""" experimental classification experiment using Simba trained classifiers in a pool which are converted using the pure-predict package"""
 
+""" experimental classification experiment using Simba trained classifiers in a pool which are converted using the pure-predict package"""
 
 class SimbaBehaviorPoolExperiment:
     """
@@ -66,7 +68,6 @@ class SimbaBehaviorPoolExperiment:
         self._trial_count = {trial: 0 for trial in self._trials}
         self._trial_timers = {trial: Timer(0) for trial in self._trials}
         self._exp_timer = Timer(9999)
-
     def check_skeleton(self, frame, skeleton):
         """
         Checking each passed animal skeleton for a pre-defined set of conditions
@@ -541,6 +542,10 @@ class ExampleExperiment:
         :param frame: frame, on which animal skeleton was found
         :param skeleton: skeleton, consisting of multiple joints of an animal
         """
+        
+        
+        print(skeleton)
+        
         self.check_exp_timer()  # checking if experiment is still on
         for trial in self._trial_count:
             # checking if any trial hit a predefined cap
@@ -630,13 +635,321 @@ BLUE_POINT = (372, 63)
 
 INTERTRIAL_TIME = 40
 PENALTY_TIME = 5
-POINT = (678, 226)
-ANGLE_WINDOW = (-30, 30)
+POINT = (300,600)
 
-CTRL = False
-EXP_LENGTH = 40
-EXP_TIME = 3600
-EXP_COMPLETION = 10
+"""For FLiCRE CA1 experiment: tag freezing or no freezing, but with a high tolerance (i.e moving vs no moving)."""
+
+#local config
+
+#   0 degrees   : horizontal left
+#  90 degrees   : vertical up
+# -90 degrees   : vertical down
+#+-180 degrees  : horizontal right
+# STIM_ANGLE = int(input('Stim angle (-180 to 180degrees):'))
+
+# EXP_LENGTH = 40
+# EXP_TIME = 3600
+# EXP_COMPLETION = 10
+# ARDUINO = serial.Serial('COM3',9600,timeout=1)
+
+
+
+class TestExperiment:
+    """
+    Simple class to contain all of the experiment properties
+    Uses multiprocess to ensure the best possible performance and
+        to showcase that it is possible to work with any type of equipment, even timer-dependent
+    """
+
+    def __init__(self):
+        
+        
+        # basic stuff to get it to run
+        self.experiment_finished = False
+        self._exp_timer = Timer(30)
+        self._event = None
+        self._current_trial = None
+        
+        # max total stim time
+        self._MAX_TOTAL_STIM_TIME = 10
+        
+        # min number of bodyparts "immobile" to start stim
+        self._BP_THRESHOLD = 3
+        
+        # threshold distance to consider if bp is moving or not, in px.
+        self._DISTANCE_THRESHOLD = 5
+        
+        # init total stim time up until now
+        self._total_stim_time = 0
+        
+        # init current event start point
+        self._event_start = 0
+        
+        # init last frame position of animal to 0s.
+        self._last_frame_skeleton = {"nose" : (0,0), "left_ear" : (0,0), "right_ear" : (0,0), "neck" : (0,0), "left_side" : (0,0), "body_center" : (0,0), "right_side" : (0,0), "left_hip" : (0,0), "right_hip" : (0,0), "tail_base" : (0,0), "tail_tip" : (0,0)}
+        
+        # init distance list where we compute distance for each point between current frame and last frame.
+        self._distance = np.array([])
+        
+        # init speed list where we compute speed for each point between current frame and last frame.
+        self._speed = []
+
+        
+    def check_skeleton(self, frame, skeleton):
+        """
+        Checking each passed animal skeleton for a pre-defined set of conditions
+        Outputting the visual representation, if exist
+        Advancing trials according to inherent logic of an experiment
+        :param frame: frame, on which animal skeleton was found
+        :param skeleton: skeleton, consisting of multiple joints of an animal
+        """
+        
+        # compute distance travelled for each tracked point.
+        self._distance = np.array([calculate_distance(self._last_frame_skeleton["nose"],skeleton["nose"]), calculate_distance(self._last_frame_skeleton["left_ear"],skeleton["left_ear"]), calculate_distance(self._last_frame_skeleton["right_ear"],skeleton["right_ear"]), calculate_distance(self._last_frame_skeleton["neck"],skeleton["neck"]), calculate_distance(self._last_frame_skeleton["left_side"],skeleton["left_side"]), calculate_distance(self._last_frame_skeleton["body_center"],skeleton["body_center"]), calculate_distance(self._last_frame_skeleton["right_side"],skeleton["right_side"]), calculate_distance(self._last_frame_skeleton["left_hip"],skeleton["left_hip"]), calculate_distance(self._last_frame_skeleton["right_hip"],skeleton["right_hip"]), calculate_distance(self._last_frame_skeleton["tail_base"],skeleton["tail_base"]), calculate_distance(self._last_frame_skeleton["tail_tip"],skeleton["tail_tip"])])
+        
+        
+        
+        print(sum( self._distance <= self._DISTANCE_THRESHOLD ))
+        
+        
+        # show each point's distance travelled on the image to make it clear.
+        for n in range(len(self._distance)-1): # except for tail tip which is not tracked correctly.
+            # make sure int for opencv2
+            position = (int(50),int((n+1)*50))
+            plot_distance_traveled(frame,self._distance[n],position, self._distance[n] <= self._DISTANCE_THRESHOLD)
+        
+        
+        
+        
+        # check if total stim time reached
+        if self._total_stim_time >= self._MAX_TOTAL_STIM_TIME:
+            # if so, turn off laser and end experiment.
+            print("Ending experiment, total event time ran out")
+            """"ARDUINO : TURN OFF LASER"""
+            print('Laser OFF')
+            self.stop_experiment()
+            
+        # else, check if animal is moving or not.
+        # How many body parts are under the moving threshold ? We made _distance a numpy array for this. So you know, enjoy
+        elif sum( self._distance <= self._DISTANCE_THRESHOLD )>=self._BP_THRESHOLD:
+            
+            # if already in stim:
+            if self._event == True:
+                
+                # don't do shit, exept if we are over self._MAX_TOTAL_STIM_TIME.
+                if self._total_stim_time + ( time.time() - self._event_start ) >= self._MAX_TOTAL_STIM_TIME:
+                    
+                    # in that case, turn off laser and end experiment.
+                    print("Ending experiment, total event time ran out")
+                    """"ARDUINO : TURN OFF LASER"""
+                    self.stop_experiment()
+                    
+            
+            # else if not already in stim:
+            elif self._event == False:
+                
+                 # set event to True.
+                 self._event = True
+                 
+                 # record start of stim time so that when event end we can add to total stim.
+                 self._event_start = time.time()
+                 
+                 # turn ON laser
+                 """"ARDUINO : TURN ON LASER"""
+                 print('Laser ON')
+         
+        # else (i.e the animal is considered moving):
+        else:
+            
+            # if in stim, stop stim:
+            if self._event == True:
+                
+                # stop event
+                self._event = False
+                
+                # add event time to total stim time
+                self._total_stim_time += time.time() - self._event_start
+                
+                # turn OFF laser
+                """"ARDUINO : TURN OFF LASER"""
+                print('Laser OFF')
+            
+         
+        # prep next loop:
+            
+        # replace last frame skeleton for next loop
+        self._last_frame_skeleton = copy.deepcopy(skeleton) 
+        
+        
+        
+        return self._event
+    
+
+
+    def check_exp_timer(self):
+        """
+        Checking the experiment timer
+        """
+        if not self._exp_timer.check_timer():
+            print("Experiment is finished")
+            print("Time ran out.")
+            self.stop_experiment()
+
+    def start_experiment(self):
+        """
+        Start the experiment
+        """
+        if not self.experiment_finished:
+            self._exp_timer.start()
+
+    def stop_experiment(self):
+        """
+        Stop the experiment and reset the timer
+        """
+        self.experiment_finished = True
+        print("Experiment completed!")
+        self._exp_timer.reset()
+
+    def get_trial(self):
+        """
+        Check which trial is going on right now
+        """
+        return self._current_trial
+    
+    
+    
+    
+    
+
+class TagFreezingExperiment:
+    
+    """This experiment is designed to activate blue LASER for FLiCRE tagging of
+    cells whenever the animal is not moving. We do this so that we tag all
+    freezing cells, even freezing start (if we actually used freezing as a
+    trigger it would start 0.5s after starting freezing, so we would miss
+    them). 
+    """
+    
+    def __init__(self):
+        
+        self.experiment_finished = False
+        
+        # init current time
+        self._cur_time = 0
+        
+        # init last frame time
+        self._last_frame_time = 0
+        
+        # self._ser = arduino
+        # serial_laser_switch(self._ser,False)
+        
+        # init last frame position of animal to 0s.
+        self._last_frame_skeleton = {"nose" : (0,0), "left_ear" : (0,0), "right_ear" : (0,0), "neck" : (0,0), "left_side" : (0,0), "body_center" : (0,0), "right_center" : (0,0), "left_hip" : (0,0), "right_hip" : (0,0), "tail_base" : (0,0), "tail_tip" : (0,0)}
+        
+        # init distance list where we compute distance for each point between current frame and last frame.
+        self._distance = []
+        
+        # init speed list where we compute speed for each point between current frame and last frame.
+        self._speed = []
+
+    def check_skeleton(self, frame, skeleton):
+        # Get angle between mouse head and object, and set the 0 
+        xc,yc = skeleton["neck"][0] + np.cos(self._stim_angle*np.pi/180), skeleton["neck"][1] - np.sin(self._stim_angle*np.pi/180)
+        _, angle_point = angle_between_vectors(xc,yc,*skeleton["neck"],*skeleton["nose"])
+        """"Answer is angle from -180° to 180 ° compared to stim direction"""
+        
+        # Plot absolute angle.
+        plot_absolute_angle(frame,skeleton["nose"],skeleton["neck"],self._stim_angle,self._event)
+        
+
+        #Show absolute angle value (0 to 180° compared to stim direction).
+        plotting_position = (skeleton["nose"][0]+20 , skeleton["nose"][1]-20)
+        plot_angle_value(frame,abs(angle_point),plotting_position,self._event)
+        
+        
+        if self._experiment_timer.check_timer():
+            if self._total_time >= self._max_total_time:
+                # check if total time to stimulate per experiment is reached
+                print("Ending experiment, total event time ran out")
+                self.stop_experiment()
+            else:
+                # if not continue
+                if not self._intertrial_timer.check_timer():
+                    # check if there is an intertrial time running right now, if not continue
+                    # check if the headdirection angle is within limits
+
+                    if self._start_angle <= angle_point <= self._end_angle:
+                        if not self._event:
+                            # if a stimulation event wasn't started already, start one
+                            print("Starting Stimulation")
+                            self._event = True
+                            # and activate the laser, start the timer and reset the intertrial timer
+                            serial_laser_switch(self._ser,True)
+                            self._event_start = time.time()
+                            self._intertrial_timer.reset()
+                        else:
+                            if time.time() - self._event_start <= self._max_trial_time:
+                                # if the total event time has not reached the maximum time per event
+                                # self._trial_time = time.time() - self._event_start
+                                pass
+                            else:
+                                # if the maximum event time was reached, reset the event,
+                                # turn off the laser and start intertrial time
+                                print("Ending Stimulation, Stimulation time ran out")
+                                self._event = False
+                                # laser_toggle(False)
+                                serial_laser_switch(self._ser,False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
+                    else:
+                        # if the headdirection is not within the parameters
+                        if self._event:
+                            # but the stimulation is still going
+                            if time.time() - self._event_start < self._min_trial_time:
+                                # check if the minimum event time was not reached, then pass
+                                pass
+                            else:
+                                # if minumum event time has been reached, reset the event,
+                                # turn off the laser and start intertrial time
+                                print("Ending Stimulation, angle not in range")
+                                self._event = False
+                                # laser_toggle(False)
+                                serial_laser_switch(self._ser,False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
+        else:
+            # if maximum experiment time was reached, stop experiment
+            print("Ending experiment, timer ran out")
+            self.stop_experiment()
+
+        return self._event
+
+    def start_experiment(self):
+        # not necessary as this experiment is not needing any multiprocessing
+        self._experiment_timer.start()
+
+    def stop_experiment(self):
+        self.experiment_finished = True
+        print("Experiment completed!")
+        print("Total event duration", sum(self._results))
+        print(self._results)
+
+    def get_trial(self):
+        return self._event
+
+    def get_info(self):
+        """ returns optional info"""
+        info = None
+        return info
+
 
 
 class SpeedExperiment:
@@ -718,253 +1031,113 @@ class SpeedExperiment:
 class FirstExperiment:
     def __init__(self):
         self.experiment_finished = False
-        self._trials_list = self.generate_trials_list(self._trials, EXP_LENGTH)
-        self._result_list = []
-        self._iti_list = self.generate_iti_list(EXP_LENGTH, min=10)
-        self._iti_duration = INTERTRIAL_TIME
-        self._intertrial_timer = Timer(self._iti_duration)
-        self._penalty_timer = Timer(PENALTY_TIME)
-        self._process = ClassicProtocolProcess(self._trials)
-        self._success_count = {trial: [] for trial in self._trials}
-        self._completion_counter = {trial: False for trial in self._trials}
-        self._event = None
-        self._chosen_trial = None
-        self._print_check = False
-        self._stage = 1
-        self._exp_timer = Timer(EXP_TIME)
-
+        self._point = POINT
+        self._start_angle, self._end_angle = ANGLE_WINDOW
+        self._intertrial_timer = Timer(15)
+        self._experiment_timer = Timer(1800)
+        self._event = False
+        self._event_start = None
+        self._results = []
+        self._max_trial_time = 5
+        self._min_trial_time = 1
+        self._max_total_time = 600
+        self._total_time = 0
+        self._trial_time = 0
+        self._test= 1
     def check_skeleton(self, frame, skeleton):
-        status, trial = self._process.get_status()
-        if status:
-            current_trial = self._trials[trial]
-            condition, response = current_trial["trigger"].check_skeleton(skeleton)
-            self._process.pass_condition(condition)
-            result = self._process.get_result()
-            if result is not None:
-                self.process_result(result, trial)
-                self._chosen_trial = None
-                print(self._completion_counter)
-                # check if all trials were successful until completion
-                if all(self._completion_counter.values()):
-                    print("Experiment is finished")
-                    print("All trials reached required amount of successes")
-                    self.stop_experiment()
-
+        
+        # Get angle between mouse head and object
+        _, angle_point = angle_between_vectors(
+            *skeleton["nose"],*skeleton["neck"], *self._point
+        )     
+        print(angle_point)
+        #Show object's XY coordinates
+        plot_dots(frame,self._point,(255, 0, 0))
+        
+        #Show angle between mice head and object
+        plot_angle(frame,skeleton["nose"], skeleton["neck"], self._point,(255, 0, 0))
+        
+        if self._experiment_timer.check_timer():
+            if self._total_time >= self._max_total_time:
+                # check if total time to stimulate per experiment is reached
+                print("Ending experiment, total event time ran out")
+                self.stop_experiment()
+            else:
                 # if not continue
-                self._iti_duration = next(self._iti_list, False)
-                self._intertrial_timer = Timer(self._iti_duration)
-                print(
-                    " Going into InterTrialTime for "
-                    + str(self._iti_duration)
-                    + " sec."
-                )
-
-                self._intertrial_timer.start()
-            result = None
-            plot_triggers_response(frame, response)
-
-        # elif not self._intertrial_timer.check_timer() and not self._penalty_timer.check_timer():
-        elif not self._intertrial_timer.check_timer():
-            # chosen_trial = random.choice(list(self._experiment['possible_trials'].keys()))
-            if self._chosen_trial is None:
-                self._chosen_trial = next(self._trials_list, False)
-            elif not self._chosen_trial:
-                print("Experiment is finished due to max. trial number.")
-                print(self._result_list)
-                self.stop_experiment()
-            elif self._counter["result"][("Greenbar_whiteback", True)] >= 20:
-                print("Reached max amount of CS+ trial successes!")
-                print(self._result_list)
-                self.stop_experiment()
-            else:
-                # if self._counter['trial']['Greenbar_whiteback'] >= 10:
-                #     # check if 10 green trials have passed and change trigger stage
-                #     self._stage = 2
-                if self.check_triggers(skeleton):
-                    # check trial start triggers
-                    self._process.set_trial(self._chosen_trial)
-                    self._print_check = False
-                elif not self._print_check:
-                    print(
-                        "Next trial: #"
-                        + str(len(self._result_list) + 1)
-                        + " "
-                        + self._chosen_trial
-                    )
-                    print(
-                        "Animal is not meeting trial start criteria, the start of trial is delayed."
-                    )
-                    self._print_check = True
-                    # self._penalty_timer.reset()
-                    # self._penalty_timer.start()
-        # if experimental time ran out, finish experiments
-        self.check_exp_timer()
-
-    def process_result(self, result, trial):
-        """
-        Will add result if TRUE or reset comp_counter if FALSE
-        :param result: bool if trial was successful
-        :param trial: str name of the trial
-        :return:
-        """
-        self._result_list.append((trial, result))
-        if result is True:
-            if (
-                trial == "Bluebar_whiteback"
-                and self._completion_counter["Greenbar_whiteback"] is False
-            ):
-                self._success_count[trial] = []
-                print("Success ignored. Waiting for Green.")
-            else:
-                self._success_count[trial].append(result)
-                self.check_completion()
-                print("Trial successful")
-                print(
-                    "Successful trials in a row so far:"
-                    + str(len(self._success_count[trial]))
-                )
+                if not self._intertrial_timer.check_timer():
+                    # check if there is an intertrial time running right now, if not continue
+                    # check if the headdirection angle is within limits
+                    if self._start_angle <= angle_point <= self._end_angle:
+                        if not self._event:
+                            # if a stimulation event wasn't started already, start one
+                            print("Starting Stimulation")
+                            self._event = True
+                            # and activate the laser, start the timer and reset the intertrial timer
+                            # laser_switch(True)
+                            self._event_start = time.time()
+                            self._intertrial_timer.reset()
+                        else:
+                            if time.time() - self._event_start <= self._max_trial_time:
+                                # if the total event time has not reached the maximum time per event
+                                # self._trial_time = time.time() - self._event_start
+                                pass
+                            else:
+                                # if the maximum event time was reached, reset the event,
+                                # turn off the laser and start intertrial time
+                                print("Ending Stimulation, Stimulation time ran out")
+                                self._event = False
+                                # laser_toggle(False)
+                                # laser_switch(False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
+                    else:
+                        # if the headdirection is not within the parameters
+                        if self._event:
+                            # but the stimulation is still going
+                            if time.time() - self._event_start < self._min_trial_time:
+                                # check if the minimum event time was not reached, then pass
+                                pass
+                            else:
+                                # if minumum event time has been reached, reset the event,
+                                # turn of the laser and start intertrial time
+                                print("Ending Stimulation, angle not in range")
+                                self._event = False
+                                # laser_toggle(False)
+                                # laser_switch(False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
         else:
-            self._success_count[trial] = []
-            print("Trial failed, resetting completion criterion")
-
-        trial_counter = self._counter["trial"]
-        result_counter = self._counter["result"]
-        print(trial_counter)
-        print(result_counter)
-
-    def check_completion(self):
-        """
-        Check the stored successes count for required amount of successes in a row
-        """
-        pass
-        # for trial in self._trials:
-        #     if len(self._success_count[trial]) >= EXP_COMPLETION:
-        #         if trial == 'Bluebar_whiteback' and self._completion_counter['Greenbar_whiteback'] is True:
-        #             self._completion_counter[trial] = True
-        #         elif trial == 'Greenbar_whiteback':
-        #             self._completion_counter[trial] = True
-
-    def check_triggers(self, skeleton):
-        """
-        checks stage dependent trigger dict
-        :param skeleton: bodypart coordinates
-        :return: returns whether all triggers were true
-        """
-        result_list = []
-        result = False
-        for trigger in self._triggers.values():
-            trigger_result, _ = trigger.check_skeleton(skeleton)
-            result_list.append(trigger_result)
-        if all(result_list):
-            result = True
-
-        return result
-
-    @staticmethod
-    def generate_trials_list(trials: dict, length: int):
-        trials_list = []
-        for trial in range(length):
-            trials_list.append(random.choice(list(trials.keys())))
-        return iter(trials_list)
-
-    @staticmethod
-    def generate_iti_list(length: int, min: int = 0):
-        iti_list = []
-        for i in range(length):
-            iti = random.randint(min, INTERTRIAL_TIME + 1)
-            iti_list.append(iti)
-        return iter(iti_list)
-
-    @property
-    def _trials(self):
-
-        # self.triggers['orient'] = ScreenTrigger('North', 90, ['neck', 'nose'])
-        region_trigger = RegionTrigger("circle", (650, 37), 50, "nose")
-        outside_trigger = OutsideTrigger("circle", (650, 37), 50, "nose")
-        if not CTRL:
-            trials = {
-                "Greenbar_whiteback": dict(
-                    stimulus_timer=Timer(10),
-                    collection_timer=Timer(10),
-                    success_timer=Timer(7),
-                    trigger=region_trigger,
-                    result_func=any,
-                    random_reward=False,
-                ),
-                "Bluebar_whiteback": dict(
-                    stimulus_timer=Timer(10),
-                    collection_timer=Timer(10),
-                    success_timer=Timer(7),
-                    trigger=outside_trigger,
-                    result_func=all,
-                    random_reward=False,
-                ),
-            }
-        else:
-            trials = {
-                "CTRL": dict(
-                    stimulus_timer=Timer(10),
-                    collection_timer=Timer(7),
-                    success_timer=Timer(10),
-                    trigger=region_trigger,
-                    result_func=any,
-                    random_reward=False,
-                )
-            }
-
-        return trials
-
-    @property
-    def _triggers(self):
-        """
-        creates trial start condition triggers depending on the experimental stage"
-        :return: dict of triggers
-        """
-        if self._stage == 1:
-            triggers = dict(orient=ScreenTrigger("North", 90, ["neck", "nose"]))
-
-        # if self._stage == 2:
-        #     triggers = dict(orient = ScreenTrigger('North', 90, ['neck', 'nose']),
-        #                     region = OutsideTrigger('circle', (650, 50), 50, 'nose'))
-
-        return triggers
-
-    @property
-    def _counter(self):
-        """
-        counts instances of each past trial as saved in result_list dict
-        :return: dictionary of all trial types (key) and number of past occurences (value)
-        """
-        trial_list = [i[0] for i in self._result_list]
-        trial_counter = Counter(trial_list)
-        res_counter = Counter(self._result_list)
-        return {"trial": trial_counter, "result": res_counter}
-
-    def check_exp_timer(self):
-        if not self._exp_timer.check_timer():
-            print("Experiment is finished")
-            print("Time ran out.")
+            # if maximum experiment time was reached, stop experiment
+            print("Ending experiment, timer ran out")
             self.stop_experiment()
 
+        return self._event
+
     def start_experiment(self):
-        if not self.experiment_finished:
-            self._exp_timer.start()
-            self._intertrial_timer.start()
-            self._process.start()
+        # not necessary as this experiment is not needing any multiprocessing
+        self._experiment_timer.start()
 
     def stop_experiment(self):
-        # stopping the experiment
-        self._process.end()
         self.experiment_finished = True
+        print("Experiment completed!")
+        print("Total event duration", sum(self._results))
+        print(self._results)
 
     def get_trial(self):
-        return self._chosen_trial
+        return self._event
 
     def get_info(self):
         """ returns optional info"""
         info = None
         return info
-
 
 class SecondExperiment:
     def __init__(self):
@@ -1143,8 +1316,7 @@ class SecondExperiment:
         """ returns optional info"""
         info = None
         return info
-
-
+    
 class OptogenExperiment:
     def __init__(self):
         self.experiment_finished = False
@@ -1160,9 +1332,8 @@ class OptogenExperiment:
         self._max_total_time = 600
         self._total_time = 0
         self._trial_time = 0
-
     def check_skeleton(self, frame, skeleton):
-
+        
         if self._experiment_timer.check_timer():
             if self._total_time >= self._max_total_time:
                 # check if total time to stimulate per experiment is reached
@@ -1174,8 +1345,9 @@ class OptogenExperiment:
                     # check if there is an intertrial time running right now, if not continue
                     # check if the headdirection angle is within limits
                     _, angle_point = angle_between_vectors(
-                        *skeleton["neck"], *skeleton["nose"], *self._point
-                    )
+                        *skeleton["nose"],*skeleton["neck"], *self._point
+                    )     
+
                     if self._start_angle <= angle_point <= self._end_angle:
                         if not self._event:
                             # if a stimulation event wasn't started already, start one
@@ -1248,8 +1420,127 @@ class OptogenExperiment:
         info = None
         return info
 
+class C4TeamOptoG:
+    def __init__(self):
+        self.experiment_finished = False
+        self._start_angle, self._end_angle = ANGLE_WINDOW
+        self._stim_angle = STIM_ANGLE
+        self._intertrial_timer = Timer(0)
+        self._experiment_timer = Timer(1800)
+        self._event = False
+        self._event_start = None
+        self._results = []
+        self._max_trial_time = 100
+        self._min_trial_time = 0
+        self._max_total_time = 600
+        self._total_time = 0
+        self._trial_time = 0
+        self._ser = arduino
+        serial_laser_switch(self._ser,False)
+        
+        
+    def check_skeleton(self, frame, skeleton):
+        
+        # Get angle between mouse head and object, and set the 0 
+        xc,yc = skeleton["neck"][0] + np.cos(self._stim_angle*np.pi/180), skeleton["neck"][1] - np.sin(self._stim_angle*np.pi/180)
+        _, angle_point = angle_between_vectors(xc,yc,*skeleton["neck"],*skeleton["nose"])
+        """"Answer is angle from -180° to 180 ° compared to stim direction"""
+        
+        # Plot absolute angle.
+        plot_absolute_angle(frame,skeleton["nose"],skeleton["neck"],self._stim_angle,self._event)
+        
+
+        #Show absolute angle value (0 to 180° compared to stim direction).
+        plotting_position = (skeleton["nose"][0]+20 , skeleton["nose"][1]-20)
+        plot_angle_value(frame,abs(angle_point),plotting_position,self._event)
+        
+        
+        if self._experiment_timer.check_timer():
+            if self._total_time >= self._max_total_time:
+                # check if total time to stimulate per experiment is reached
+                print("Ending experiment, total event time ran out")
+                self.stop_experiment()
+            else:
+                # if not continue
+                if not self._intertrial_timer.check_timer():
+                    # check if there is an intertrial time running right now, if not continue
+                    # check if the headdirection angle is within limits
+
+                    if self._start_angle <= angle_point <= self._end_angle:
+                        if not self._event:
+                            # if a stimulation event wasn't started already, start one
+                            print("Starting Stimulation")
+                            self._event = True
+                            # and activate the laser, start the timer and reset the intertrial timer
+                            serial_laser_switch(self._ser,True)
+                            self._event_start = time.time()
+                            self._intertrial_timer.reset()
+                        else:
+                            if time.time() - self._event_start <= self._max_trial_time:
+                                # if the total event time has not reached the maximum time per event
+                                # self._trial_time = time.time() - self._event_start
+                                pass
+                            else:
+                                # if the maximum event time was reached, reset the event,
+                                # turn off the laser and start intertrial time
+                                print("Ending Stimulation, Stimulation time ran out")
+                                self._event = False
+                                # laser_toggle(False)
+                                serial_laser_switch(self._ser,False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
+                    else:
+                        # if the headdirection is not within the parameters
+                        if self._event:
+                            # but the stimulation is still going
+                            if time.time() - self._event_start < self._min_trial_time:
+                                # check if the minimum event time was not reached, then pass
+                                pass
+                            else:
+                                # if minumum event time has been reached, reset the event,
+                                # turn off the laser and start intertrial time
+                                print("Ending Stimulation, angle not in range")
+                                self._event = False
+                                # laser_toggle(False)
+                                serial_laser_switch(self._ser,False)
+                                # self._trial_time = time.time() - self._event_start
+                                trial_time = time.time() - self._event_start
+                                self._total_time += trial_time
+                                self._results.append(trial_time)
+                                print("Stimulation duration", trial_time)
+                                self._intertrial_timer.start()
+        else:
+            # if maximum experiment time was reached, stop experiment
+            print("Ending experiment, timer ran out")
+            self.stop_experiment()
+
+        return self._event
+
+    def start_experiment(self):
+        # not necessary as this experiment is not needing any multiprocessing
+        self._experiment_timer.start()
+
+    def stop_experiment(self):
+        self.experiment_finished = True
+        print("Experiment completed!")
+        print("Total event duration", sum(self._results))
+        print(self._results)
+
+    def get_trial(self):
+        return self._event
+
+    def get_info(self):
+        """ returns optional info"""
+        info = None
+        return info
 
 class Reward_PreTraining:
+    
+    
     def __init__(self):
         self.experiment_finished = False
         self._trials_list = self.generate_trials_list(self._trials, 30)
@@ -1373,3 +1664,6 @@ class Reward_PreTraining:
         """ returns optional info"""
         info = None
         return info
+    
+    
+    
